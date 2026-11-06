@@ -11,7 +11,7 @@ Output: one JSON object per line for a waybar custom module (return-type json).
 """
 import json, os, random, select, signal, subprocess, sys, threading, time
 
-IDLE_AFTER   = 1.8     # seconds of stillness before the clock returns
+IDLE_AFTER   = 2.0    # seconds of stillness before the clock returns
 FADE_STEPS   = (35, 60, 82, 100)   # alpha % frames for fade-in
 FADE_DT      = 0.045   # seconds per fade frame
 TICK         = 1 / 30  # main loop rate
@@ -159,15 +159,14 @@ def main():
             moving = now - state["last_motion"] < IDLE_AFTER
             d = state["dir"]
         if moving:
-            if now >= next_blink:
-                emit(EYES["b"], "eye")
-                time.sleep(0.11)
-                next_blink = now + random.uniform(2.5, 5)
-            txt = EYES[d]
+            # the drawn eyes (s10-eyes) sit on top of the pill: fade the text out
             if mode != "eye":
-                fade_in(txt, "eye")
+                if shown:
+                    for a in reversed(FADE_STEPS[:-1]):
+                        emit(shown[0], shown[1], a)
+                        time.sleep(FADE_DT)
                 mode = "eye"
-            emit(txt, "eye")
+            emit("", "eye")
         else:
             txt, cls = clock_text(now)
             if mode != "clock" or (shown and shown[1] != cls):

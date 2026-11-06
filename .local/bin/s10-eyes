@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""
+s10-eyes — drawn eyes that sit on the waybar clock pill and watch the pointer.
+
+* Fade/scale in when the pointer moves, fade out after 2 s of stillness.
+* Each eye aims at the pointer independently (natural convergence).
+* Iris + pupil + glint + lid shadow, eased motion, random blinks.
+* Click-through: the pill underneath still receives every click.
+
+Tuning:  s10-eyes [--y 8] [--h 34] [--w 150]
+"""
+import os, sys
+LIB = "/usr/lib/libgtk4-layer-shell.so"
+if "S10_EYES_PRELOADED" not in os.environ and os.path.exists(LIB):
+    os.environ["LD_PRELOAD"] = LIB + ((":" + os.environ["LD_PRELOAD"]) if os.environ.get("LD_PRELOAD") else "")
+    os.environ["S10_EYES_PRELOADED"] = "1"
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+import json, math, random, select, subprocess, threading, time
+import cairo, gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gtk4LayerShell", "1.0")
+from gi.repository import Gtk, Gdk, GLib, Gtk4LayerShell as LS
+
+def arg(name, default):
+    if name in sys.argv:
+        return int(sys.argv[sys.argv.index(name) + 1])
+    return default
+
+TOP, HEIGHT, WIDTH = arg("--y", 8), arg("--h", 34), arg("--w", 150)
+IDLE = 2.0
+
+# ---- screen (logical) --------------------------------------------------------
+try:
+    o = json.loads(subprocess.run(["niri", "msg", "--json", "focused-output"],
+                                  capture_output=True, text=True).stdout)
+    SW, SH = o["logical"]["width"], o["logical"]["height"]
+except Exception:
+    SW, SH = 1920, 1080
+
+ptr = {"x": SW / 2, "y": SH / 2, "t": 0.0}
+lk = threading.Lock()
+
+# ---- pointer tracking from raw input -----------------------------------------
+def track():
+    try:
+        import evdev
+        from evdev import ecodes as E
+    except ImportError:
+        return
+    devs = {}
+    for p in evdev.list_devices():
+        try:
+            d = evdev.InputDevice(p)
+            c = d.capabilities()
+            rel = c.get(E.EV_REL, [])
+            ab = [x[0] if isinstance(x, tuple) else x for x in c.get(E.EV_ABS, [])]
+            keys = c.get(E.EV_KEY, [])
+            if E.REL_X in rel or (E.ABS_X in ab and (E.BTN_TOUCH in keys or E.BTN_TOOL_FINGER in keys)):
+                devs[d.fd] = d
+            else:
+                d.close()
+        except Exception:
+            pass
+    last = {}
+    while devs:
+        r, _, _ = select.select(list(devs), [], [], 1.0)
+        for fd in r:
+            d = devs[fd]
+            try:
+                for ev in d.read():
+                    dx = dy = 0.0
+                    if ev.type == E.EV_REL:
+                        if ev.code == E.REL_X: dx = ev.value * 1.2
+                        elif ev.code == E.REL_Y: dy = ev.value * 1.2
+                    elif ev.type == E.EV_ABS and ev.code in (E.ABS_X, E.ABS_Y):
+                        k = (fd, ev.code); pv = last.get(k); last[k] = ev.value
+                        if pv is not None and abs(ev.value - pv) < 400:
+                            if ev.code == E.ABS_X: dx = (ev.value - pv) * 1.6
+                            else: dy = (ev.value - pv) * 1.6
+                    elif ev.type == E.EV_KEY and ev.code in (E.BTN_TOUCH, E.BTN_TOOL_FINGER) and ev.value == 0:
+                        for k in [k for k in last if k[0] == fd]: del last[k]
+                    if dx or dy:
+                        with lk:
+                            ptr["x"] = min(SW, max(0, ptr["x"] + dx))
+                            ptr["y"] = min(SH, max(0, ptr["y"] + dy))
+                            ptr["t"] = time.monotonic()
+            except OSError:
+                devs.pop(fd, None)
+
+threading.Thread(target=track, daemon=True).start()
+
+# ---- drawing -----------------------------------------------------------------
+RX, RY, IRIS, PUPIL, GAP = 12.5, 9.0, 5.6, 2.7, 17.0
+
+class Eyes:
+    def __init__(self):
+        self.vis = 0.0
+        self.off = [[0.0, 0.0], [0.0, 0.0]]
+        self.blink_at = time.monotonic() + random.uniform(2.5, 5.5)
+        self.blink_t = -1.0
+
+    def step(self, now):
+        with lk:
+            moving = now - ptr["t"] < IDLE
+            px, py = ptr["x"], ptr["y"]
+        target = 1.0 if moving else 0.0
+        self.vis += (target - self.vis) * (0.22 if target else 0.12)
+        if abs(self.vis - target) < 0.004: self.vis = target
+        # gaze per eye
+        cy = TOP + HEIGHT / 2
+        for i, sx in enumerate((-GAP, GAP)):
+            ex = SW / 2 + sx
+            vx, vy = px - ex, py - cy
+            dist = math.hypot(vx, vy) or 1.0
+            m = min(1.0, dist / 260.0)
+            tx = vx / dist * (RX - IRIS - 0.8) * m
+            ty = vy / dist * (RY - IRIS + 1.2) * m
+            o = self.off[i]
+            o[0] += (tx - o[0]) * 0.28
+            o[1] += (ty - o[1]) * 0.28
+        # blink scheduling
+        if self.blink_t < 0 and now >= self.blink_at and self.vis > 0.9:
+            self.blink_t = now
+        return self.vis > 0 or target > 0
+
+    def lid(self, now):
+        if self.blink_t < 0: return 1.0
+        p = (now - self.blink_t) / 0.17
+        if p >= 1:
+            self.blink_t = -1.0
+            self.blink_at = now + random.uniform(2.5, 6.0)
+            return 1.0
+        return 1.0 - 0.92 * math.sin(math.pi * p)
+
+    def draw(self, cr, w, h, now):
+        if self.vis <= 0: return
+        lid = self.lid(now)
+        e = 1 - (1 - self.vis) ** 3                  # ease-out
+        cr.push_group()
+        cr.translate(w / 2, h / 2)
+        s = 0.82 + 0.18 * e
+        cr.scale(s, s)
+        for i, sx in enumerate((-GAP, GAP)):
+            ox, oy = self.off[i]
+            cr.save()
+            cr.translate(sx, 0)
+            # eye shape
+            cr.save(); cr.scale(RX, RY * lid); cr.arc(0, 0, 1, 0, 2 * math.pi); cr.restore()
+            path = cr.copy_path()
+            g = cairo.RadialGradient(0, -2, 1, 0, 0, RX)
+            g.add_color_stop_rgb(0, 1, 1, 1)
+            g.add_color_stop_rgb(1, 0.80, 0.83, 0.88)
+            cr.set_source(g); cr.fill_preserve()
+            cr.save(); cr.clip()
+            # iris
+            cr.arc(ox, oy, IRIS, 0, 2 * math.pi)
+            ig = cairo.RadialGradient(ox - 1, oy - 1, 0.5, ox, oy, IRIS)
+            ig.add_color_stop_rgb(0, 0.46, 0.50, 0.58)
+            ig.add_color_stop_rgb(0.7, 0.20, 0.22, 0.27)
+            ig.add_color_stop_rgb(1, 0.08, 0.09, 0.11)
+            cr.set_source(ig); cr.fill()
+            # pupil
+            cr.arc(ox, oy, PUPIL, 0, 2 * math.pi)
+            cr.set_source_rgb(0.02, 0.02, 0.03); cr.fill()
+            # glint
+            cr.arc(ox - 1.6, oy - 1.9, 1.25, 0, 2 * math.pi)
+            cr.set_source_rgba(1, 1, 1, 0.92); cr.fill()
+            # upper-lid shadow
+            lg = cairo.LinearGradient(0, -RY, 0, -RY * 0.2)
+            lg.add_color_stop_rgba(0, 0, 0, 0, 0.32)
+            lg.add_color_stop_rgba(1, 0, 0, 0, 0)
+            cr.rectangle(-RX, -RY, 2 * RX, RY); cr.set_source(lg); cr.fill()
+            cr.restore()
+            # rim
+            cr.new_path(); cr.append_path(path)
+            cr.set_line_width(1.0); cr.set_source_rgba(1, 1, 1, 0.35); cr.stroke()
+            cr.restore()
+        cr.pop_group_to_source()
+        cr.paint_with_alpha(e)
+
+eyes = Eyes()
+
+def on_activate(app):
+    win = Gtk.Window(application=app)
+    win.set_decorated(False)
+    win.set_default_size(WIDTH, HEIGHT)
+    LS.init_for_window(win)
+    LS.set_layer(win, LS.Layer.OVERLAY)
+    LS.set_namespace(win, "s10-eyes")
+    LS.set_anchor(win, LS.Edge.TOP, True)
+    LS.set_margin(win, LS.Edge.TOP, TOP)
+    LS.set_exclusive_zone(win, -1)
+    LS.set_keyboard_mode(win, LS.KeyboardMode.NONE)
+
+    css = Gtk.CssProvider()
+    css.load_from_data(b"window, drawingarea { background: transparent; }")
+    Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
+                                              Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    area = Gtk.DrawingArea()
+    area.set_content_width(WIDTH); area.set_content_height(HEIGHT)
+    area.set_draw_func(lambda a, cr, w, h: eyes.draw(cr, w, h, time.monotonic()))
+    win.set_child(area)
+
+    def passthrough(*_):
+        surf = win.get_surface()
+        if surf: surf.set_input_region(cairo.Region())
+    win.connect("realize", passthrough)
+
+    def tick(widget, clock):
+        if eyes.step(time.monotonic()):
+            area.queue_draw()
+        return GLib.SOURCE_CONTINUE
+    area.add_tick_callback(tick)
+    win.present()
+    passthrough()
+
+app = Gtk.Application(application_id="dev.s10.eyes")
+app.connect("activate", on_activate)
+app.run(None)

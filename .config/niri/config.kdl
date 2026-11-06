@@ -594,3 +594,5 @@ spawn-at-startup "~/.local/bin/s10-dash" "--hidden"
 spawn-at-startup "~/.local/bin/s10-dash-input"
 
 spawn-at-startup "swww-daemon"
+
+spawn-at-startup "s10-eyes"
