@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-# Evenly split tiled columns on the focused workspace when the column count changes.
+# Evenly split tiled columns on a workspace when its column count changes.
+# Resizes by window id, so focus never jumps between windows.
 import json, subprocess
 
 def query(what):
     out = subprocess.run(["niri", "msg", "--json", what], capture_output=True, text=True).stdout
     return json.loads(out) if out else []
-
-def act(*args):
-    subprocess.run(["niri", "msg", "action", *args], capture_output=True)
 
 last = {}
 
@@ -16,30 +14,26 @@ def rebalance():
         wins = query("windows")
     except Exception:
         return
-    focused = next((w for w in wins if w.get("is_focused")), None)
-    if not focused or focused.get("is_floating"):
-        return
-    ws = focused.get("workspace_id")
-    cols = {}
+    per_ws = {}
     for w in wins:
-        if w.get("workspace_id") != ws or w.get("is_floating"):
+        if w.get("is_floating") or w.get("workspace_id") is None:
             continue
         pos = (w.get("layout") or {}).get("pos_in_scrolling_layout")
-        cols.setdefault(pos[0] if pos else ("w", w["id"]), w["id"])
-    n = len(cols)
-    if n == 0 or last.get(ws) == n:
-        return
-    last[ws] = n
-    if n > 3:
-        return
-    width = {1: "100%", 2: "50%", 3: "33.333%"}[n]
-    for wid in cols.values():
-        act("focus-window", "--id", str(wid))
-        act("set-column-width", width)
-    act("focus-window", "--id", str(focused["id"]))
+        per_ws.setdefault(w["workspace_id"], {}).setdefault(pos[0] if pos else ("w", w["id"]), w["id"])
+    for ws, cols in per_ws.items():
+        n = len(cols)
+        if last.get(ws) == n:
+            continue
+        last[ws] = n
+        if not 1 <= n <= 3:
+            continue
+        width = {1: "100%", 2: "50%", 3: "33.333%"}[n]
+        for wid in cols.values():
+            subprocess.run(["niri", "msg", "action", "set-window-width", "--id", str(wid), width],
+                           capture_output=True)
 
 rebalance()
 proc = subprocess.Popen(["niri", "msg", "--json", "event-stream"], stdout=subprocess.PIPE, text=True)
 for line in proc.stdout:
-    if "WindowOpenedOrChanged" in line or "WindowClosed" in line:
+    if line.startswith('{"WindowOpenedOrChanged') or line.startswith('{"WindowClosed') or '"WindowsChanged' in line[:20]:
         rebalance()

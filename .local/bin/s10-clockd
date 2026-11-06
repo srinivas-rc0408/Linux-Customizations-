@@ -149,6 +149,7 @@ def fade_in(text, cls):
 
 # ------------------------------------------------------------------- main --
 def main():
+    open("/tmp/s10-clockd.pid","w").write(str(os.getpid()))
     threading.Thread(target=input_thread, daemon=True).start()
     state["last_motion"] = time.monotonic() + 0.8   # leave room for the eyes' wake-up
     mode = None

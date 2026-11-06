@@ -1,0 +1,3 @@
+#!/bin/sh
+# s10-vol: serialize swayosd calls so held keys never race (no bouncing OSD)
+exec flock -w 0.15 /tmp/s10-vol.lock swayosd-client "$@"

@@ -86,8 +86,8 @@
     "on-scroll-down": "brightnessctl set 5%-"
   },
   "pulseaudio": {
-    "on-scroll-up": "swayosd-client --output-volume +2 --max-volume 150",
-    "on-scroll-down": "swayosd-client --output-volume -2",
+    "on-scroll-up": "~/.local/bin/s10-vol --output-volume +2 --max-volume 150",
+    "on-scroll-down": "~/.local/bin/s10-vol --output-volume -2",
     "smooth-scrolling-threshold": 1,
     "format": "󰕾 {volume}%",
     "format-muted": "󰝟",

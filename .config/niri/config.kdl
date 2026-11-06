@@ -336,8 +336,19 @@ animations {
         "
     }
     window-close {
-        duration-ms 150
+        duration-ms 170
         curve "ease-out-quad"
+        custom-shader r"
+            vec4 close_color(vec3 coords_geo, vec3 size_geo) {
+                float p = niri_clamped_progress;
+                float scale = 1.0 - 0.06 * p;
+                vec3 coords = vec3((coords_geo.xy - 0.5) / scale + 0.5, 1.0);
+                if (coords.x < 0.0 || coords.x > 1.0 || coords.y < 0.0 || coords.y > 1.0)
+                    return vec4(0.0);
+                vec3 coords_tex = niri_geo_to_tex * coords;
+                return texture2D(niri_tex, coords_tex.st) * (1.0 - p);
+            }
+        "
     }
     // Uncomment to turn off all animations.
     // off
@@ -458,8 +469,8 @@ binds {
     Shift+Print hotkey-overlay-title="Record area (toggle)" { spawn "~/.local/bin/screenrec"; }
 
     // ── hardware keys ────────────────────────────────────
-    XF86AudioRaiseVolume  allow-when-locked=true { spawn "swayosd-client" "--output-volume" "+3" "--max-volume" "150"; }
-    XF86AudioLowerVolume  allow-when-locked=true { spawn "swayosd-client" "--output-volume" "-3"; }
+    XF86AudioRaiseVolume  allow-when-locked=true { spawn "~/.local/bin/s10-vol" "--output-volume" "+3" "--max-volume" "150"; }
+    XF86AudioLowerVolume  allow-when-locked=true { spawn "~/.local/bin/s10-vol" "--output-volume" "-3"; }
     XF86AudioMute         allow-when-locked=true { spawn "swayosd-client" "--output-volume" "mute-toggle"; }
     XF86AudioMicMute      allow-when-locked=true { spawn "swayosd-client" "--input-volume" "mute-toggle"; }
     XF86MonBrightnessUp   allow-when-locked=true { spawn "swayosd-client" "--brightness" "+5"; }
@@ -595,4 +606,4 @@ spawn-at-startup "~/.local/bin/s10-dash-input"
 
 spawn-at-startup "swww-daemon"
 
-spawn-at-startup "s10-eyes"
+spawn-at-startup "~/.local/bin/s10-eyes"
