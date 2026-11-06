@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# s10-wall — one engine for every wallpaper switch, always a real crossfade.
+#   s10-wall image <file>     static  (from static or live)
+#   s10-wall video <file.mp4> live    (from static or live)
+#   s10-wall warm             pre-scale all images + first frames (idle priority)
+#
+# Leaving a video: the frame on screen is captured, frozen under it, the video
+# is removed invisibly, then swww crossfades. Entering a video: swww crossfades
+# to the video's exact first frame, then mpvpaper starts on that same frame.
+
+SOCK=/tmp/s10-mpv.sock
+VLINK="$HOME/.config/s10/video-wall"
+WALLLINK="$HOME/Pictures/wall.jpg"
+CACHE="$HOME/.cache/s10"; mkdir -p "$CACHE/walls" "$CACHE/frames" "$HOME/.config/s10"
+VDIR="$HOME/Videos/wallpapers"
+mapfile -t IDIRS < <(find "$HOME" -mindepth 1 -maxdepth 3 -type d -iname 'wallpaper*' -not -path '*/.*' 2>/dev/null)
+LOCK=/tmp/s10-wall.lock
+FADE=0.7
+
+exec 9>"$LOCK"; flock 9        # one switch at a time; rapid clicks queue cleanly
+
+read -r W H HZ < <(niri msg --json focused-output 2>/dev/null | python3 -c '
+import sys, json
+try:
+    o = json.load(sys.stdin); m = o["modes"][o["current_mode"]]
+    print(m["width"], m["height"], max(60, round(m["refresh_rate"] / 1000)))
+except Exception:
+    print(1920, 1080, 60)')
+
+key() { printf '%s %s %sx%s' "$1" "$(stat -c %Y "$1")" "$W" "$H" | md5sum | cut -c1-16; }
+
+scaled() {   # image -> exact-resolution cached png
+  local out="$CACHE/walls/$(key "$1").png"
+  [ -f "$out" ] || magick "$1" -resize "${W}x${H}^" -gravity center -extent "${W}x${H}" -strip "$out.tmp.png" \
+                    && mv -f "$out.tmp.png" "$out" 2>/dev/null
+  printf '%s' "$out"
+}
+
+frame0() {   # video -> its first frame at screen resolution, cropped like mpv panscan=1
+  local out="$CACHE/frames/$(key "$1").png"
+  [ -f "$out" ] || ffmpeg -nostdin -loglevel error -y -i "$1" -frames:v 1 \
+      -vf "scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}" "$out"
+  printf '%s' "$out"
+}
+
+ensure_swww() {
+  swww query >/dev/null 2>&1 && return
+  setsid -f swww-daemon >/dev/null 2>&1
+  for _ in $(seq 40); do swww query >/dev/null 2>&1 && return; sleep 0.05; done
+}
+
+fade_to() {
+  swww img "$1" --resize crop --transition-type fade --transition-duration "$FADE" \
+       --transition-fps "$HZ" --transition-bezier .25,.1,.25,1 >/dev/null 2>&1
+}
+
+freeze_video() {   # pause the video, rebuild that exact frame under it, remove the video
+  pgrep -x mpvpaper >/dev/null || return 0
+  local src t shot=/tmp/s10-cur.png
+  src=$(readlink -f "$VLINK" 2>/dev/null)
+  t=$(python3 - "$SOCK" <<'PY'
+import json, socket, sys
+try:
+    c = socket.socket(socket.AF_UNIX); c.settimeout(0.5); c.connect(sys.argv[1])
+    c.sendall(b'{"command":["set_property","pause",true]}\n'
+              b'{"command":["get_property","time-pos"],"request_id":9}\n')
+    buf = b""
+    while b'"request_id":9' not in buf:
+        buf += c.recv(4096)
+    for line in buf.splitlines():
+        m = json.loads(line)
+        if m.get("request_id") == 9 and isinstance(m.get("data"), (int, float)):
+            print(f'{m["data"]:.3f}')
+except Exception:
+    pass
+PY
+)
+  rm -f "$shot"
+  if [ -n "$t" ] && [ -f "$src" ]; then
+    ffmpeg -nostdin -loglevel error -y -ss "$t" -i "$src" -frames:v 1 \
+      -vf "scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}" "$shot"
+  fi
+  if [ -s "$shot" ]; then
+    swww img "$shot" --resize crop --transition-type none >/dev/null 2>&1
+    sleep 0.08
+  fi
+  pkill -x mpvpaper; sleep 0.05
+}
+
+start_video() {
+  setsid -f mpvpaper -p -o "no-audio loop-file=inf hwdec=vaapi vo=gpu-next panscan=1.0 keepaspect=yes profile=fast osc=no input-ipc-server=$SOCK" \
+         "*" "$1" >/dev/null 2>&1
+}
+
+case "$1" in
+  image)
+    [ -f "$2" ] || exit 1
+    ensure_swww
+    img=$(scaled "$2")
+    freeze_video
+    fade_to "$img"
+    rm -f "$VLINK"; ln -sf "$(realpath "$2")" "$WALLLINK"
+    ;;
+  video)
+    [ -f "$2" ] || exit 1
+    ensure_swww
+    f=$(frame0 "$2")
+    freeze_video
+    fade_to "$f"
+    sleep "$FADE"
+    ln -sf "$(realpath "$2")" "$VLINK"
+    start_video "$(realpath "$2")"
+    ;;
+  warm)
+    exec 9>&-                  # don't hold the switch lock while warming
+    renice -n 19 $$ >/dev/null; ionice -c3 -p $$ 2>/dev/null
+    for d in "${IDIRS[@]}"; do
+      [ -d "$d" ] || continue
+      find "$d" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print0 |
+        while IFS= read -r -d '' f; do scaled "$f" >/dev/null; done
+    done
+    for v in "$VDIR"/*.mp4; do [ -f "$v" ] && frame0 "$v" >/dev/null; done
+    ;;
+  *) echo "usage: s10-wall image <file> | video <file> | warm"; exit 1 ;;
+esac
+exit 0
