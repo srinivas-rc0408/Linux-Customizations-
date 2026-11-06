@@ -191,7 +191,7 @@ def on_activate(app):
     win.set_decorated(False)
     win.set_default_size(WIDTH, HEIGHT)
     LS.init_for_window(win)
-    LS.set_layer(win, LS.Layer.OVERLAY)
+    LS.set_layer(win, LS.Layer.TOP)   # hidden under fullscreen apps
     LS.set_namespace(win, "s10-eyes")
     LS.set_anchor(win, LS.Edge.TOP, True)
     LS.set_margin(win, LS.Edge.TOP, TOP)

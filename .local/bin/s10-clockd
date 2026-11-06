@@ -158,6 +158,9 @@ def publish(m):
 
 def main():
     open("/tmp/s10-clockd.pid","w").write(str(os.getpid()))
+    # waybar just (re)started: restack the eyes above the fresh bar
+    subprocess.Popen(["sh", "-c", "sleep 1; systemctl --user restart s10-eyes"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     threading.Thread(target=input_thread, daemon=True).start()
     state["last_motion"] = time.monotonic() + 0.8   # leave room for the eyes' wake-up
     mode = None
