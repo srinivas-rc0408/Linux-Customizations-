@@ -45,7 +45,7 @@ frame0() {   # video -> its first frame at screen resolution, cropped like mpv p
 
 ensure_swww() {
   swww query >/dev/null 2>&1 && return
-  setsid -f swww-daemon >/dev/null 2>&1
+  setsid -f swww-daemon >/dev/null 2>&1 9>&-
   for _ in $(seq 40); do swww query >/dev/null 2>&1 && return; sleep 0.05; done
 }
 
@@ -89,12 +89,13 @@ PY
 
 start_video() {
   setsid -f mpvpaper -p -o "no-audio loop-file=inf hwdec=vaapi vo=gpu-next panscan=1.0 keepaspect=yes profile=fast osc=no input-ipc-server=$SOCK" \
-         "*" "$1" >/dev/null 2>&1
+         "*" "$1" >/dev/null 2>&1 9>&-
 }
 
 case "$1" in
   image)
     [ -f "$2" ] || exit 1
+    case "${2,,}" in *.jpg|*.jpeg|*.png|*.webp) ;; *) echo "not an image: $2"; exit 1 ;; esac
     ensure_swww
     img=$(scaled "$2")
     freeze_video
@@ -103,6 +104,7 @@ case "$1" in
     ;;
   video)
     [ -f "$2" ] || exit 1
+    case "${2,,}" in *.mp4|*.mkv|*.webm|*.mov) ;; *) echo "not a video: $2"; exit 1 ;; esac
     ensure_swww
     f=$(frame0 "$2")
     freeze_video

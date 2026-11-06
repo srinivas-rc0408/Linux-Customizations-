@@ -143,35 +143,13 @@ def thumb_for(path, video=False):
             GdkPixbuf.Pixbuf.new_from_file_at_scale(path, 384, 240, True).savev(out, "png", [], [])
     return out if os.path.exists(out) else None
 
+WALL = f"{HOME}/.local/bin/s10-wall"
+
 def set_image(path):
-    try: shutil.copyfile(path, CURRENT)
-    except Exception: pass
-    try: os.remove(VLINK)
-    except Exception: pass
-    had_video = subprocess.run(["pgrep", "-x", "mpvpaper"], capture_output=True).returncode == 0
-    def work():
-        if subprocess.run(["swww", "query"], capture_output=True).returncode != 0:
-            bg("swww-daemon")
-            for _ in range(30):
-                if subprocess.run(["swww", "query"], capture_output=True).returncode == 0: break
-                threading.Event().wait(0.05)
-        a = ["/home/superior/.local/bin/s10-swall", CURRENT, "--transition-fps", "120"]
-        a += (["--transition-type", "none"] if had_video else
-              ["--transition-type", "grow", "--transition-pos", "0.5,0.5",
-               "--transition-duration", "1.1", "--transition-bezier", ".2,.8,.2,1"])
-        subprocess.run(a, capture_output=True)
-        if had_video:
-            threading.Event().wait(0.35)
-            subprocess.run(["pkill", "-x", "mpvpaper"])
-    threading.Thread(target=work, daemon=True).start()
+    bg(WALL, "image", path)        # engine does capture -> crossfade off the UI thread
 
 def set_video(path):
-    try:
-        if os.path.islink(VLINK) or os.path.exists(VLINK): os.remove(VLINK)
-        os.symlink(path, VLINK)
-    except Exception: pass
-    if not mpv(["loadfile", path, "replace"]):
-        bg(VWALL)
+    bg(WALL, "video", path)
 
 class Dash(Gtk.ApplicationWindow):
     def __init__(self, app):
@@ -438,6 +416,7 @@ class Dash(Gtk.ApplicationWindow):
         for v in vids:
             t = thumb_for(v, True)
             if t: GLib.idle_add(self.add, self.flow_live, v, t, True, os.path.realpath(v) == cur_v)
+        bg(WALL, "warm")            # pre-scale everything at idle priority
         for i in imgs:
             try:
                 t = thumb_for(i)
