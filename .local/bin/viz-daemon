@@ -11,7 +11,7 @@ is_short() {
 start() {
   pgrep -f "cava -p $CFG" >/dev/null && return
   setsid -f kitty +kitten panel --edge=bottom --layer=bottom --lines=16 --margin-left=$M --margin-right=$M --margin-bottom=28 --exclusive-zone=0 --override-exclusive-zone -o background_opacity=0 -o font_size=6 cava -p "$CFG" >/dev/null 2>&1
-  setsid -f kitty +kitten panel --edge=bottom --layer=bottom --lines=1 --margin-left=$M --margin-right=$M --margin-bottom=232 --exclusive-zone=0 --override-exclusive-zone -o background_opacity=0 -o font_size=10.5 -o "font_family=JetBrainsMono Nerd Font" -o foreground=#d8d8dc "$HOME/.local/bin/viz-title" >/dev/null 2>&1
+  setsid -f kitty +kitten panel --edge=bottom --layer=bottom --lines=1 --margin-left=$M --margin-right=$M --margin-bottom=232 --exclusive-zone=0 --override-exclusive-zone -o background_opacity=0 -o font_size=11 -o "font_family=Inter Medium" -o foreground=#bfc3cc "$HOME/.local/bin/viz-title" >/dev/null 2>&1
 }
 stop() { pkill -f "cava -p $CFG"; pkill -f viz-title; }
 check() {

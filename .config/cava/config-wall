@@ -11,6 +11,7 @@ method = pipewire
 source = auto
 
 [output]
+show_idle_bar_heads = 0
 method = noncurses
 channels = mono
 mono_option = average
@@ -19,8 +20,8 @@ orientation = bottom
 [color]
 gradient = 1
 gradient_count = 3
-gradient_color_1 = '#2a2a30'
-gradient_color_2 = '#8a8a94'
+gradient_color_1 = '#6e7480'
+gradient_color_2 = '#c8ccd4'
 gradient_color_3 = '#ffffff'
 
 [smoothing]
