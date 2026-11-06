@@ -120,9 +120,9 @@ signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
 # ----------------------------------------------------------------- output --
 last_out = None
-def emit(text, cls, alpha=100):
+def emit(text, cls, alpha=100, width=None):
     global last_out
-    pad = max(0, WIDTH - len(text))
+    pad = max(0, (width or WIDTH) - len(text))
     text = " " * (pad // 2) + text + " " * (pad - pad // 2)
     markup = text.replace("&", "&amp;").replace("<", "&lt;")
     if alpha < 100:
@@ -150,6 +150,7 @@ def fade_in(text, cls):
 # ------------------------------------------------------------------- main --
 def main():
     threading.Thread(target=input_thread, daemon=True).start()
+    state["last_motion"] = time.monotonic() + 0.8   # leave room for the eyes' wake-up
     mode = None
     shown = None
     next_blink = time.monotonic() + random.uniform(2.5, 5)
@@ -166,7 +167,7 @@ def main():
                         emit(shown[0], shown[1], a)
                         time.sleep(FADE_DT)
                 mode = "eye"
-            emit("", "eye")
+            emit("", "eye", width=5)
         else:
             txt, cls = clock_text(now)
             if mode != "clock" or (shown and shown[1] != cls):

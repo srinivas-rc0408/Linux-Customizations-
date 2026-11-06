@@ -27,7 +27,7 @@ def arg(name, default):
         return int(sys.argv[sys.argv.index(name) + 1])
     return default
 
-TOP, HEIGHT, WIDTH = arg("--y", 8), arg("--h", 34), arg("--w", 150)
+TOP, HEIGHT, WIDTH = arg("--y", 8), arg("--h", 34), arg("--w", 80)
 IDLE = 2.0
 
 # ---- screen (logical) --------------------------------------------------------
@@ -90,94 +90,95 @@ def track():
 
 threading.Thread(target=track, daemon=True).start()
 
-# ---- drawing -----------------------------------------------------------------
-RX, RY, IRIS, PUPIL, GAP = 12.5, 9.0, 5.6, 2.7, 17.0
+# ---- drawing: minimal "robot" eyes -------------------------------------------
+EW, EH, ER, GAP = 10.0, 15.0, 4.6, 9.5      # eye width/height/corner radius, half-gap
+BOOT = time.monotonic()
+
+def rrect(cr, x, y, w, h, r):
+    r = min(r, w / 2, h / 2)
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
 
 class Eyes:
     def __init__(self):
         self.vis = 0.0
-        self.off = [[0.0, 0.0], [0.0, 0.0]]
-        self.blink_at = time.monotonic() + random.uniform(2.5, 5.5)
+        self.g = [0.0, 0.0]          # eased gaze, -1..1
+        self.gv = [0.0, 0.0]         # gaze velocity (spring)
+        self.blink_at = time.monotonic() + random.uniform(3, 6)
         self.blink_t = -1.0
 
+    def intro_gaze(self, t):
+        # wake-up: open, glance left, glance right, blink, settle
+        if t < 0.7:  return (0.0, 0.0), True
+        if t < 1.25: return (-0.9, 0.1), True
+        if t < 1.8:  return (0.9, 0.1), True
+        if t < 2.6:  return (0.0, 0.0), True
+        return None, False
+
     def step(self, now):
+        t = now - BOOT
+        intro, in_intro = self.intro_gaze(t)
+        if in_intro and t > 1.85 and self.blink_t < 0 and t < 1.95:
+            self.blink_t = now
         with lk:
-            moving = now - ptr["t"] < IDLE
+            moving = in_intro or now - ptr["t"] < IDLE
             px, py = ptr["x"], ptr["y"]
         target = 1.0 if moving else 0.0
-        self.vis += (target - self.vis) * (0.22 if target else 0.12)
+        self.vis += (target - self.vis) * (0.16 if target else 0.10)
         if abs(self.vis - target) < 0.004: self.vis = target
-        # gaze per eye
-        cy = TOP + HEIGHT / 2
-        for i, sx in enumerate((-GAP, GAP)):
-            ex = SW / 2 + sx
-            vx, vy = px - ex, py - cy
-            dist = math.hypot(vx, vy) or 1.0
-            m = min(1.0, dist / 260.0)
-            tx = vx / dist * (RX - IRIS - 0.8) * m
-            ty = vy / dist * (RY - IRIS + 1.2) * m
-            o = self.off[i]
-            o[0] += (tx - o[0]) * 0.28
-            o[1] += (ty - o[1]) * 0.28
-        # blink scheduling
-        if self.blink_t < 0 and now >= self.blink_at and self.vis > 0.9:
+        if intro:
+            tx, ty = intro
+        else:
+            cy = TOP + HEIGHT / 2
+            tx = max(-1.0, min(1.0, (px - SW / 2) / (SW * 0.38)))
+            ty = max(-1.0, min(1.0, (py - cy) / (SH * 0.55))) * 2 - 0.6
+            ty = max(-1.0, min(1.0, ty))
+        for i, tv in enumerate((tx, ty)):            # critically-damped spring
+            a = (tv - self.g[i]) * 0.22 - self.gv[i] * 0.55
+            self.gv[i] += a
+            self.g[i] += self.gv[i]
+        if self.blink_t < 0 and now >= self.blink_at and self.vis > 0.95:
             self.blink_t = now
         return self.vis > 0 or target > 0
 
     def lid(self, now):
         if self.blink_t < 0: return 1.0
-        p = (now - self.blink_t) / 0.17
+        p = (now - self.blink_t) / 0.18
         if p >= 1:
             self.blink_t = -1.0
-            self.blink_at = now + random.uniform(2.5, 6.0)
+            self.blink_at = now + random.uniform(3, 6.5)
             return 1.0
-        return 1.0 - 0.92 * math.sin(math.pi * p)
+        return 1.0 - 0.88 * math.sin(math.pi * p)
 
     def draw(self, cr, w, h, now):
         if self.vis <= 0: return
+        e = 1 - (1 - self.vis) ** 3
         lid = self.lid(now)
-        e = 1 - (1 - self.vis) ** 3                  # ease-out
-        cr.push_group()
-        cr.translate(w / 2, h / 2)
-        s = 0.82 + 0.18 * e
-        cr.scale(s, s)
-        for i, sx in enumerate((-GAP, GAP)):
-            ox, oy = self.off[i]
-            cr.save()
-            cr.translate(sx, 0)
-            # eye shape
-            cr.save(); cr.scale(RX, RY * lid); cr.arc(0, 0, 1, 0, 2 * math.pi); cr.restore()
-            path = cr.copy_path()
-            g = cairo.RadialGradient(0, -2, 1, 0, 0, RX)
-            g.add_color_stop_rgb(0, 1, 1, 1)
-            g.add_color_stop_rgb(1, 0.80, 0.83, 0.88)
-            cr.set_source(g); cr.fill_preserve()
-            cr.save(); cr.clip()
-            # iris
-            cr.arc(ox, oy, IRIS, 0, 2 * math.pi)
-            ig = cairo.RadialGradient(ox - 1, oy - 1, 0.5, ox, oy, IRIS)
-            ig.add_color_stop_rgb(0, 0.46, 0.50, 0.58)
-            ig.add_color_stop_rgb(0.7, 0.20, 0.22, 0.27)
-            ig.add_color_stop_rgb(1, 0.08, 0.09, 0.11)
-            cr.set_source(ig); cr.fill()
-            # pupil
-            cr.arc(ox, oy, PUPIL, 0, 2 * math.pi)
-            cr.set_source_rgb(0.02, 0.02, 0.03); cr.fill()
-            # glint
-            cr.arc(ox - 1.6, oy - 1.9, 1.25, 0, 2 * math.pi)
-            cr.set_source_rgba(1, 1, 1, 0.92); cr.fill()
-            # upper-lid shadow
-            lg = cairo.LinearGradient(0, -RY, 0, -RY * 0.2)
-            lg.add_color_stop_rgba(0, 0, 0, 0, 0.32)
-            lg.add_color_stop_rgba(1, 0, 0, 0, 0)
-            cr.rectangle(-RX, -RY, 2 * RX, RY); cr.set_source(lg); cr.fill()
-            cr.restore()
-            # rim
-            cr.new_path(); cr.append_path(path)
-            cr.set_line_width(1.0); cr.set_source_rgba(1, 1, 1, 0.35); cr.stroke()
-            cr.restore()
-        cr.pop_group_to_source()
-        cr.paint_with_alpha(e)
+        gx, gy = self.g
+        cr.translate(w / 2 + gx * 5.5, h / 2 + gy * 2.6)
+        for side in (-1, 1):
+            # the eye nearer the gaze grows a touch (perspective)
+            grow = 1 + 0.14 * gx * side
+            ew = EW * (1 + 0.06 * gx * side)
+            eh = EH * grow * lid * (0.15 + 0.85 * e)
+            x = side * GAP - ew / 2 + gx * 1.2
+            y = -eh / 2
+            # soft glow
+            for k, a in ((3.0, 0.05), (1.8, 0.09), (0.8, 0.14)):
+                rrect(cr, x - k, y - k, ew + 2 * k, eh + 2 * k, ER + k)
+                cr.set_source_rgba(0.85, 0.92, 1.0, a * e)
+                cr.fill()
+            # body
+            rrect(cr, x, y, ew, eh, ER)
+            g = cairo.LinearGradient(0, y, 0, y + eh)
+            g.add_color_stop_rgba(0, 1, 1, 1, e)
+            g.add_color_stop_rgba(1, 0.84, 0.89, 0.96, e)
+            cr.set_source(g)
+            cr.fill()
 
 eyes = Eyes()
 
