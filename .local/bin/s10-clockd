@@ -148,6 +148,14 @@ def fade_in(text, cls):
         time.sleep(FADE_DT)
 
 # ------------------------------------------------------------------- main --
+MODE_FILE = "/tmp/s10-clock-mode"
+def publish(m):
+    try:
+        with open(MODE_FILE + ".tmp", "w") as f: f.write(m)
+        os.replace(MODE_FILE + ".tmp", MODE_FILE)
+    except OSError:
+        pass
+
 def main():
     open("/tmp/s10-clockd.pid","w").write(str(os.getpid()))
     threading.Thread(target=input_thread, daemon=True).start()
@@ -168,10 +176,14 @@ def main():
                         emit(shown[0], shown[1], a)
                         time.sleep(FADE_DT)
                 mode = "eye"
+                publish("eye")
             emit("", "eye", width=5)
         else:
             txt, cls = clock_text(now)
             if mode != "clock" or (shown and shown[1] != cls):
+                if mode != "clock":
+                    publish("clock")
+                    time.sleep(0.12)          # let the eyes close first
                 fade_in(txt, cls)
                 mode = "clock"
             shown = (txt, cls)

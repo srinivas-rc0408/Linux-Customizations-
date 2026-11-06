@@ -606,4 +606,4 @@ spawn-at-startup "~/.local/bin/s10-dash-input"
 
 spawn-at-startup "swww-daemon"
 
-spawn-at-startup "~/.local/bin/s10-eyes"
+spawn-at-startup "systemctl" "--user" "restart" "s10-eyes"

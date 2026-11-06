@@ -125,10 +125,14 @@ class Eyes:
         if in_intro and t > 1.85 and self.blink_t < 0 and t < 1.95:
             self.blink_t = now
         with lk:
-            moving = in_intro or now - ptr["t"] < IDLE
             px, py = ptr["x"], ptr["y"]
-        target = 1.0 if moving else 0.0
-        self.vis += (target - self.vis) * (0.16 if target else 0.10)
+        try:
+            clock_mode = open("/tmp/s10-clock-mode").read().strip()
+        except OSError:
+            clock_mode = "clock"
+        # the clock daemon owns the decision, so eyes and text never overlap
+        target = 1.0 if (in_intro or clock_mode == "eye") else 0.0
+        self.vis += (target - self.vis) * (0.16 if target else 0.22)
         if abs(self.vis - target) < 0.004: self.vis = target
         if intro:
             tx, ty = intro
