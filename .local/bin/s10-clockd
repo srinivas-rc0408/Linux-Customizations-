@@ -1,49 +1,184 @@
 #!/usr/bin/env python3
-# Streaming waybar clock: time 7s / date 3s cycle, single click = date 10s, USR2 = back to time.
-import datetime, json, os, signal, time
-TIME_SECS, DATE_SECS, MANUAL_SECS, FADE = 7, 3, 10, 0.55
-open("/tmp/s10-clockd.pid", "w").write(str(os.getpid()))
-st = {"mode": "time", "until": time.time() + TIME_SECS, "manual": False, "click": False, "revert": False}
+"""
+s10-clockd — waybar clock pill with a pointer-tracking eye.
 
-def text(mode):
-    n = datetime.datetime.now()
-    return n.strftime("\uf017   %I:%M %p") if mode == "time" else n.strftime("\uf073   %a \u00b7 %d %b")
+  pointer moving        -> eyes follow the movement direction (with blinks)
+  pointer idle >= 1.8 s -> eyes fade out, time fades in (time 7 s / date 3 s)
+  single click (USR1)   -> date for 10 s
+  double click (<450ms) -> toggle the dashboard
 
-def emit(t, c):
-    print(json.dumps({"text": t, "class": c}), flush=True)
+Output: one JSON object per line for a waybar custom module (return-type json).
+"""
+import json, os, random, select, signal, subprocess, sys, threading, time
 
-def switch(mode, dur, manual=False):
-    emit(text(st["mode"]), "fade")
-    time.sleep(FADE)
-    st.update(mode=mode, until=time.time() + dur, manual=manual)
-    emit(text(mode), mode)
-    return text(mode)
+IDLE_AFTER   = 1.8     # seconds of stillness before the clock returns
+FADE_STEPS   = (35, 60, 82, 100)   # alpha % frames for fade-in
+FADE_DT      = 0.045   # seconds per fade frame
+TICK         = 1 / 30  # main loop rate
+WIDTH        = 12      # fixed visual width so the pill never jumps
+CLOCK_ICON   = ""  # nerd-font clock
 
-signal.signal(signal.SIGUSR1, lambda *_: st.update(click=True))
-signal.signal(signal.SIGUSR2, lambda *_: st.update(revert=True))
+EYES = {
+    "c":  "◉   ◉",
+    "l":  "◐   ◐",
+    "r":  "◑   ◑",
+    "u":  "◓   ◓",
+    "d":  "◒   ◒",
+    "b":  "─   ─",   # blink
+}
 
-last = text("time")
-emit(last, "time")
-while True:
+state = {
+    "last_motion": 0.0,
+    "dir": "c",
+    "force_date_until": 0.0,
+    "last_click": 0.0,
+}
+lock = threading.Lock()
+
+# ------------------------------------------------------------------ input --
+def input_thread():
     try:
-        if st["revert"]:
-            st.update(revert=False, click=False)
-            if st["mode"] == "date":
-                last = switch("time", TIME_SECS)
-        elif st["click"]:
-            st["click"] = False
-            if st["mode"] == "date" and st["manual"]:
-                last = switch("time", TIME_SECS)
+        import evdev
+        from evdev import ecodes as E
+    except ImportError:
+        return
+    devs = []
+    for path in evdev.list_devices():
+        try:
+            d = evdev.InputDevice(path)
+            caps = d.capabilities()
+            rel = caps.get(E.EV_REL, [])
+            ab = [c[0] if isinstance(c, tuple) else c for c in caps.get(E.EV_ABS, [])]
+            keys = caps.get(E.EV_KEY, [])
+            if (E.REL_X in rel) or (E.ABS_X in ab and (E.BTN_TOUCH in keys or E.BTN_TOOL_FINGER in keys)):
+                devs.append(d)
             else:
-                last = switch("date", MANUAL_SECS, True)
-        elif time.time() >= st["until"]:
-            last = switch("date", DATE_SECS) if st["mode"] == "time" else switch("time", TIME_SECS)
+                d.close()
+        except Exception:
+            pass
+    if not devs:
+        return
+    fdmap = {d.fd: d for d in devs}
+    vx = vy = 0.0
+    last_abs = {}
+    while True:
+        r, _, _ = select.select(list(fdmap), [], [], 1.0)
+        for fd in r:
+            d = fdmap[fd]
+            try:
+                for ev in d.read():
+                    dx = dy = 0
+                    if ev.type == E.EV_REL:
+                        if ev.code == E.REL_X: dx = ev.value
+                        elif ev.code == E.REL_Y: dy = ev.value
+                    elif ev.type == E.EV_ABS and ev.code in (E.ABS_X, E.ABS_Y):
+                        key = (fd, ev.code)
+                        prev = last_abs.get(key)
+                        last_abs[key] = ev.value
+                        if prev is not None:
+                            delta = ev.value - prev
+                            if abs(delta) < 400:   # ignore finger-lift jumps
+                                if ev.code == E.ABS_X: dx = delta
+                                else: dy = delta
+                    elif ev.type == E.EV_KEY and ev.code in (E.BTN_TOUCH, E.BTN_TOOL_FINGER) and ev.value == 0:
+                        for k in [k for k in last_abs if k[0] == fd]:
+                            del last_abs[k]
+                    if dx or dy:
+                        vx = vx * 0.75 + dx
+                        vy = vy * 0.75 + dy
+                        if abs(vx) > abs(vy) * 1.2:
+                            dr = "r" if vx > 0 else "l"
+                        elif abs(vy) > abs(vx) * 1.2:
+                            dr = "d" if vy > 0 else "u"
+                        else:
+                            dr = "c"
+                        with lock:
+                            state["last_motion"] = time.monotonic()
+                            state["dir"] = dr
+            except OSError:
+                fdmap.pop(fd, None)
+        if not fdmap:
+            return
+
+# ---------------------------------------------------------------- signals --
+def on_click(*_):
+    now = time.monotonic()
+    with lock:
+        if now - state["last_click"] < 0.45:
+            state["last_click"] = 0.0
+            state["force_date_until"] = 0.0
+            subprocess.Popen([os.path.expanduser("~/.local/bin/s10-dash-toggle")],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            t = text(st["mode"])
-            if t != last:
-                last = t
-                emit(t, st["mode"])
-        time.sleep(0.05)
-    except Exception:
-        st.update(mode="time", until=time.time() + TIME_SECS, manual=False)
-        last = text("time"); emit(last, "time")
+            state["last_click"] = now
+            state["force_date_until"] = now + 10
+            state["last_motion"] = 0.0   # show clock immediately
+
+signal.signal(signal.SIGUSR1, on_click)
+signal.signal(signal.SIGUSR2, lambda *_: None)
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+# ----------------------------------------------------------------- output --
+last_out = None
+def emit(text, cls, alpha=100):
+    global last_out
+    pad = max(0, WIDTH - len(text))
+    text = " " * (pad // 2) + text + " " * (pad - pad // 2)
+    markup = text.replace("&", "&amp;").replace("<", "&lt;")
+    if alpha < 100:
+        markup = f'<span alpha="{alpha}%">{markup}</span>'
+    out = json.dumps({"text": markup, "class": cls, "tooltip": ""})
+    if out != last_out:
+        sys.stdout.write(out + "\n")
+        sys.stdout.flush()
+        last_out = out
+
+def clock_text(now_m):
+    t = time.localtime()
+    with lock:
+        forced = now_m < state["force_date_until"]
+    show_date = forced or (int(time.time()) % 10) >= 7
+    if show_date:
+        return f"{CLOCK_ICON}  " + time.strftime("%a %d %b", t), "date"
+    return f"{CLOCK_ICON}  " + time.strftime("%I:%M %p", t), "time"
+
+def fade_in(text, cls):
+    for a in FADE_STEPS:
+        emit(text, cls, a)
+        time.sleep(FADE_DT)
+
+# ------------------------------------------------------------------- main --
+def main():
+    threading.Thread(target=input_thread, daemon=True).start()
+    mode = None
+    shown = None
+    next_blink = time.monotonic() + random.uniform(2.5, 5)
+    while True:
+        now = time.monotonic()
+        with lock:
+            moving = now - state["last_motion"] < IDLE_AFTER
+            d = state["dir"]
+        if moving:
+            if now >= next_blink:
+                emit(EYES["b"], "eye")
+                time.sleep(0.11)
+                next_blink = now + random.uniform(2.5, 5)
+            txt = EYES[d]
+            if mode != "eye":
+                fade_in(txt, "eye")
+                mode = "eye"
+            emit(txt, "eye")
+        else:
+            txt, cls = clock_text(now)
+            if mode != "clock" or (shown and shown[1] != cls):
+                fade_in(txt, cls)
+                mode = "clock"
+            shown = (txt, cls)
+            emit(txt, cls)
+        time.sleep(TICK)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (BrokenPipeError, KeyboardInterrupt):
+        pass

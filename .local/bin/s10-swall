@@ -1,8 +1,54 @@
 #!/usr/bin/env bash
-# s10-swall: instant static wallpaper switch
+# s10-swall — smooth static wallpaper switch.
+#   s10-swall <image> [ignored swww args]   switch to image
+#   s10-swall --warm                          pre-scale every wallpaper once
+# Images are pre-scaled to the monitor's exact resolution and cached, so swww
+# never resizes during a transition. The transition runs at the panel's refresh.
+
+CACHE="$HOME/.cache/s10/walls"; mkdir -p "$CACHE"
+DIRS=("$HOME/Pictures/wallpapers" "$HOME/Pictures/Wallpapers" "$HOME/wallpapers" "$HOME/Pictures")
+
+read -r W H HZ < <(niri msg --json focused-output 2>/dev/null | python3 -c '
+import sys, json
+try:
+    o = json.load(sys.stdin); m = o["modes"][o["current_mode"]]
+    print(m["width"], m["height"], max(60, round(m["refresh_rate"] / 1000)))
+except Exception:
+    print(1920, 1080, 60)')
+
+cached() {  # $1 = source image -> prints cache path
+  local key; key=$(printf '%s %s %sx%s' "$1" "$(stat -c %Y "$1")" "$W" "$H" | md5sum | cut -c1-16)
+  printf '%s/%s.png' "$CACHE" "$key"
+}
+build() {   # $1 = source, $2 = dest
+  magick "$1" -resize "${W}x${H}^" -gravity center -extent "${W}x${H}" -strip "$2.tmp.png" \
+    && mv "$2.tmp.png" "$2"
+}
+
+if [ "$1" = "--warm" ]; then
+  n=0
+  for d in "${DIRS[@]}"; do
+    [ -d "$d" ] || continue
+    while IFS= read -r -d '' f; do
+      c=$(cached "$f"); [ -f "$c" ] || { build "$f" "$c" && n=$((n+1)); }
+    done < <(find "$d" -maxdepth 2 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print0)
+  done
+  echo "warmed $n wallpaper(s) at ${W}x${H}"
+  exit 0
+fi
+
 img=""; for a in "$@"; do [ -f "$a" ] && img="$a"; done
 [ -n "$img" ] || exit 1
-swww query >/dev/null 2>&1 || { setsid -f swww-daemon; for i in 1 2 3 4 5 6 7 8 9 10; do swww query >/dev/null 2>&1 && break; sleep 0.05; done; }
-swww img "$img" --transition-type fade --transition-duration 0.35 --transition-fps 60 --resize crop >/dev/null 2>&1 &
-( sleep 0.4; rm -f ~/.config/s10/video-wall; pkill -x mpvpaper ) >/dev/null 2>&1 &
-disown -a; exit 0
+
+swww query >/dev/null 2>&1 || { setsid -f swww-daemon; for _ in $(seq 20); do swww query >/dev/null 2>&1 && break; sleep 0.05; done; }
+
+c=$(cached "$img")
+if [ -f "$c" ]; then src="$c"; else src="$img"; ( build "$img" "$c" ) >/dev/null 2>&1 & fi
+
+swww img "$src" --resize crop \
+  --transition-type fade --transition-duration 0.6 \
+  --transition-fps "$HZ" --transition-bezier .22,.61,.36,1 >/dev/null 2>&1 &
+
+( sleep 0.65; rm -f "$HOME/.config/s10/video-wall"; pkill -x mpvpaper ) >/dev/null 2>&1 &
+disown -a
+exit 0
