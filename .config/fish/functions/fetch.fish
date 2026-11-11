@@ -1,7 +1,8 @@
 function fetch
-    # logo needs ~110 columns (logo + host/cpu lines); below that show info only
+    # side-by-side needs ~110 columns; narrower windows put the bolt above the info
     if test $COLUMNS -lt 110
-        fastfetch --logo none
+        fastfetch --logo ~/.config/fastfetch/s10.txt --logo-type file --logo-color-1 default \
+                  --logo-position top --logo-padding-top 1 --logo-padding-left 12
     else
         fastfetch --logo ~/.config/fastfetch/s10.txt --logo-type file --logo-color-1 default \
                         --logo-padding-top 3 --logo-padding-left 3 --logo-padding-right 6
