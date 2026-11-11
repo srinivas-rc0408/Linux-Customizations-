@@ -13,19 +13,23 @@ VLINK="$HOME/.config/s10/video-wall"
 WALLLINK="$HOME/Pictures/wall.jpg"
 CACHE="$HOME/.cache/s10"; mkdir -p "$CACHE/walls" "$CACHE/frames" "$HOME/.config/s10"
 VDIR="$HOME/Videos/wallpapers"
-mapfile -t IDIRS < <(find "$HOME" -mindepth 1 -maxdepth 3 -type d -iname 'wallpaper*' -not -path '*/.*' 2>/dev/null)
 LOCK=/tmp/s10-wall.lock
-FADE=0.7
+FADE=0.8
+BEZIER=.4,0,.2,1        # material "standard" ease: quick start, soft landing
 
 exec 9>"$LOCK"; flock 9        # one switch at a time; rapid clicks queue cleanly
 
-read -r W H HZ < <(niri msg --json focused-output 2>/dev/null | python3 -c '
+SCREEN="$CACHE/screen"   # "W H HZ", refreshed by `warm` (screen size rarely changes)
+if [ ! -s "$SCREEN" ]; then
+  niri msg --json focused-output 2>/dev/null | python3 -c '
 import sys, json
 try:
     o = json.load(sys.stdin); m = o["modes"][o["current_mode"]]
     print(m["width"], m["height"], max(60, round(m["refresh_rate"] / 1000)))
 except Exception:
-    print(1920, 1080, 60)')
+    print(1920, 1080, 60)' > "$SCREEN"
+fi
+read -r W H HZ < "$SCREEN"
 
 key() { printf '%s %s %sx%s' "$1" "$(stat -c %Y "$1")" "$W" "$H" | md5sum | cut -c1-16; }
 
@@ -51,7 +55,7 @@ ensure_swww() {
 
 fade_to() {
   swww img "$1" --resize crop --transition-type fade --transition-duration "$FADE" \
-       --transition-fps "$HZ" --transition-bezier .25,.1,.25,1 >/dev/null 2>&1
+       --transition-fps "$HZ" --transition-bezier "$BEZIER" >/dev/null 2>&1
 }
 
 freeze_video() {   # pause the video, rebuild that exact frame under it, remove the video
@@ -97,7 +101,8 @@ case "$1" in
     [ -f "$2" ] || exit 1
     case "${2,,}" in *.jpg|*.jpeg|*.png|*.webp) ;; *) echo "not an image: $2"; exit 1 ;; esac
     ensure_swww
-    img=$(scaled "$2")
+    c="$CACHE/walls/$(key "$2").png"
+    if [ -f "$c" ]; then img="$c"; else img="$2"; ( scaled "$2" >/dev/null ) 9>&- & fi
     freeze_video
     fade_to "$img"
     rm -f "$VLINK"; ln -sf "$(realpath "$2")" "$WALLLINK"
@@ -116,6 +121,8 @@ case "$1" in
   warm)
     exec 9>&-                  # don't hold the switch lock while warming
     renice -n 19 $$ >/dev/null; ionice -c3 -p $$ 2>/dev/null
+    rm -f "$SCREEN"; "$0" --screen-refresh 2>/dev/null
+    mapfile -t IDIRS < <(find "$HOME" -mindepth 1 -maxdepth 3 -type d -iname 'wallpaper*' -not -path '*/.*' 2>/dev/null)
     for d in "${IDIRS[@]}"; do
       [ -d "$d" ] || continue
       find "$d" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print0 |
@@ -123,6 +130,7 @@ case "$1" in
     done
     for v in "$VDIR"/*.mp4; do [ -f "$v" ] && frame0 "$v" >/dev/null; done
     ;;
+  --screen-refresh) : ;;     # top of script already rebuilt $SCREEN
   *) echo "usage: s10-wall image <file> | video <file> | warm"; exit 1 ;;
 esac
 exit 0
