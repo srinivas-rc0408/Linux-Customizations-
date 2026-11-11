@@ -15,6 +15,8 @@ CACHE="$HOME/.cache/s10"; mkdir -p "$CACHE/walls" "$CACHE/frames" "$HOME/.config
 VDIR="$HOME/Videos/wallpapers"
 LOCK=/tmp/s10-wall.lock
 FADE=0.8
+VFADE=0.6          # fade into a live wallpaper
+VLEAD=0.25         # start the player this long into the fade; it maps as the fade lands
 BEZIER=.4,0,.2,1        # material "standard" ease: quick start, soft landing
 
 exec 9>"$LOCK"; flock 9        # one switch at a time; rapid clicks queue cleanly
@@ -54,7 +56,7 @@ ensure_swww() {
 }
 
 fade_to() {
-  swww img "$1" --resize crop --transition-type fade --transition-duration "$FADE" \
+  swww img "$1" --resize crop --transition-type fade --transition-duration "${FADE}" \
        --transition-fps "$HZ" --transition-bezier "$BEZIER" >/dev/null 2>&1
 }
 
@@ -92,7 +94,7 @@ PY
 }
 
 start_video() {
-  setsid -f mpvpaper -p -o "no-audio loop-file=inf hwdec=vaapi vo=gpu-next panscan=1.0 keepaspect=yes profile=fast osc=no input-ipc-server=$SOCK" \
+  setsid -f mpvpaper -p -o "no-audio loop-file=inf hwdec=vaapi vo=gpu-next panscan=1.0 keepaspect=yes profile=fast osc=no load-scripts=no ytdl=no input-default-bindings=no config=no input-ipc-server=$SOCK" \
          "*" "$1" >/dev/null 2>&1 9>&-
 }
 
@@ -113,10 +115,10 @@ case "$1" in
     ensure_swww
     f=$(frame0 "$2")
     freeze_video
-    fade_to "$f"
-    sleep "$FADE"
-    ln -sf "$(realpath "$2")" "$VLINK"
-    start_video "$(realpath "$2")"
+    FADE=$VFADE fade_to "$f"
+    sleep "$VLEAD"                      # mpv needs ~0.3-0.4 s to show its first frame,
+    ln -sf "$(realpath "$2")" "$VLINK"  # so launching now makes it appear exactly as the
+    start_video "$(realpath "$2")"      # fade finishes: no dead pause, no visible cut
     ;;
   warm)
     exec 9>&-                  # don't hold the switch lock while warming
