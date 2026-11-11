@@ -176,7 +176,7 @@ layout {
         //
         // The focus ring only draws around the active window, so the only place
         // where you can see its inactive-color is on other monitors.
-        inactive-color "#2a2650"
+        inactive-color "#ffffff00"
 
         // You can also use gradients. They take precedence over solid colors.
         // Gradients are rendered the same as CSS linear-gradient(angle, from, to).
@@ -240,16 +240,16 @@ layout {
         // pixels and match the CSS box-shadow properties.
 
         // Softness controls the shadow blur radius.
-        softness 30
+        softness 40
 
         // Spread expands the shadow.
-        spread 5
+        spread 2
 
         // Offset moves the shadow relative to the window.
-        offset x=0 y=5
+        offset x=0 y=10
 
         // You can also change the shadow color and opacity.
-        color "#0007"
+        color "#00000080"
     }
 
     // Struts shrink the area occupied by windows, similarly to layer-shell panels.
@@ -394,8 +394,8 @@ window-rule {
 
 // Example: enable rounded corners for all windows.
 // (This example rule is commented out with a "/-" in front.)
-/-window-rule {
-    geometry-corner-radius 12
+window-rule {
+    geometry-corner-radius 14
     clip-to-geometry true
 }
 
@@ -491,7 +491,7 @@ cursor {
     xcursor-theme "S10-Pointer"
     xcursor-size 32
     hide-when-typing
-    hide-after-inactive-ms 3000
+    hide-after-inactive-ms 2000
 }
 
 window-rule {
@@ -607,3 +607,6 @@ spawn-at-startup "~/.local/bin/s10-dash-input"
 spawn-at-startup "swww-daemon"
 
 spawn-at-startup "systemctl" "--user" "restart" "s10-eyes"
+
+// resident terminal: makes every new terminal window instant
+spawn-at-startup "ghostty" "--initial-window=false"

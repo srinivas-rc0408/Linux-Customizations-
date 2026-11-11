@@ -25,7 +25,6 @@ if status is-interactive
         rm -f ~/Pictures/launcher/*.jpg
         echo "🗑 Slideshow cleared"
     end
-    end
     function ram-hogs
         echo "🧠 Top 10 memory consumers:"
         ps aux --sort=-%mem | head -11 | awk '{printf "%-8s %5s%%  %s\n", $1, $4, $11}'
@@ -104,7 +103,27 @@ if status is-interactive
         ollama run comb-llm $argv
     end
 
-fetch
+    # fastfetch only in real interactive terminals, never for `fish -c` launches
+    if not set -q S10_NO_FETCH
+        fetch
+    end
+
+    abbr -a ls 'eza --icons --group-directories-first'
+    abbr -a ll 'eza -la --icons --git --group-directories-first'
+    abbr -a lt 'eza --tree --level=2 --icons'
+    abbr -a cat 'bat --style=plain --paging=never'
+
+    # cached shell inits: generated once, sourced instantly (no 3 subprocesses per shell)
+    set -l c ~/.cache/fish-init.fish
+    if not test -s $c; or test (command -v starship) -nt $c
+        begin
+            starship init fish --print-full-init
+            zoxide init fish
+            fzf --fish
+        end > $c 2>/dev/null
+    end
+    source $c
+end
 
 alias vpn-on="warp-cli connect"
 alias vpn-off="warp-cli disconnect"
@@ -119,11 +138,3 @@ set -x OLLAMA_MODELS /home/superior/.ollama/models
 # bun
 set --export BUN_INSTALL "$HOME/.bun"
 set --export PATH $BUN_INSTALL/bin $PATH
-starship init fish | source
-abbr -a ls 'eza --icons --group-directories-first'
-abbr -a ll 'eza -la --icons --git --group-directories-first'
-abbr -a lt 'eza --tree --level=2 --icons'
-abbr -a cat 'bat --style=plain --paging=never'
-zoxide init fish | source
-fzf --fish | source
-
