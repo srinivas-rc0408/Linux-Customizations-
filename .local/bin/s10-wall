@@ -93,6 +93,27 @@ PY
   pkill -x mpvpaper; sleep 0.05
 }
 
+live_swap() {   # live -> live inside the running player: dip to black, swap, rise (no restart)
+  python3 - "$SOCK" "$1" <<'PY'
+import json, socket, sys, time
+sock, path = sys.argv[1], sys.argv[2]
+c = socket.socket(socket.AF_UNIX); c.settimeout(1.5); c.connect(sock)
+def cmd(*a): c.sendall((json.dumps({"command": list(a)}) + "\n").encode())
+def ease(t): return 1 - (1 - t) ** 3                       # ease-out cubic
+cmd("set_property", "pause", False)
+for i in range(1, 11):                                     # 150 ms dim-out
+    cmd("set_property", "brightness", round(-100 * ease(i / 10))); time.sleep(0.015)
+cmd("loadfile", path, "replace")
+buf, t0 = b"", time.time()
+while b"playback-restart" not in buf and time.time() - t0 < 0.6:   # wait for first new frame
+    try: buf += c.recv(65536)
+    except socket.timeout: break
+for i in range(1, 19):                                     # 270 ms rise-in
+    cmd("set_property", "brightness", round(-100 * (1 - ease(i / 18)))); time.sleep(0.015)
+cmd("set_property", "brightness", 0)
+PY
+}
+
 start_video() {
   setsid -f mpvpaper -p -o "no-audio loop-file=inf hwdec=vaapi vo=gpu-next panscan=1.0 keepaspect=yes profile=fast osc=no load-scripts=no ytdl=no input-default-bindings=no config=no input-ipc-server=$SOCK" \
          "*" "$1" >/dev/null 2>&1 9>&-
@@ -112,6 +133,9 @@ case "$1" in
   video)
     [ -f "$2" ] || exit 1
     case "${2,,}" in *.mp4|*.mkv|*.webm|*.mov) ;; *) echo "not a video: $2"; exit 1 ;; esac
+    if pgrep -x mpvpaper >/dev/null && [ -S "$SOCK" ] && live_swap "$(realpath "$2")" 2>/dev/null; then
+      ln -sf "$(realpath "$2")" "$VLINK"; exit 0      # fast path: player already running
+    fi
     ensure_swww
     f=$(frame0 "$2")
     freeze_video

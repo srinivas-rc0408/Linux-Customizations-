@@ -1,5 +1,6 @@
 #!/bin/sh
-# Convert any new wallpaper videos into ~/Videos/wallpapers (1080p, 30fps, muted) and refresh the dashboard.
+# Convert new wallpaper videos into ~/Videos/wallpapers (1080p, 30fps, muted, keyframe every 0.5 s
+# so any frame can be grabbed instantly for smooth wallpaper transitions), then refresh the dashboard.
 SRC="${1:-$HOME/Downloads/wallpaper}"; OUT="$HOME/Videos/wallpapers"; mkdir -p "$OUT"
 n=0
 find "$SRC" -type f \( -iname "*.mp4" -o -iname "*.webm" -o -iname "*.mkv" -o -iname "*.mov" -o -iname "*.gif" \) | while IFS= read -r f; do
@@ -10,7 +11,7 @@ find "$SRC" -type f \( -iname "*.mp4" -o -iname "*.webm" -o -iname "*.mkv" -o -i
   printf "converting  %s\n" "$name"
   nice -n 15 ffmpeg -nostdin -loglevel error -y -i "$f" -an \
     -vf "scale=1920:1080:force_original_aspect_ratio=increase:flags=lanczos,crop=1920:1080,fps=30" \
-    -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -movflags +faststart "$out" || rm -f "$out"
+    -c:v libx264 -preset medium -crf 18 -g 15 -keyint_min 15 -pix_fmt yuv420p -movflags +faststart "$out" || rm -f "$out"
 done
 pkill -f "s10-dash --hidden"; sleep 0.5; setsid -f "$HOME/.local/bin/s10-dash" --hidden
 echo "done. library:"; ls "$OUT"
